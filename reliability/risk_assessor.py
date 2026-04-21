@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List
 
 
@@ -61,6 +62,28 @@ def assess_risk(
         # This is usually good, but still risky.
         score -= 5
         reasons.append("Bare except was modified, verify correctness.")
+
+    # ----------------------------
+    # Malformed logging replacement check
+    # ----------------------------
+    has_multi_arg_print = bool(re.search(r'print\([^)]+,[^)]+\)', original_code))
+    introduces_logging = "logging.info(" in fixed_code and "logging.info(" not in original_code
+    if has_multi_arg_print and introduces_logging:
+        score -= 30
+        reasons.append(
+            "Fix replaces multi-argument print() with logging.info() — "
+            "logging.info() does not accept positional args like print(); fix may be broken."
+        )
+
+    # ----------------------------
+    # Dangerous pattern introduction
+    # ----------------------------
+    dangerous_patterns = ["eval(", "exec(", "os.system(", "shell=True", "__import__("]
+    for pattern in dangerous_patterns:
+        if pattern in fixed_code and pattern not in original_code:
+            score -= 35
+            reasons.append(f"Fix introduces dangerous pattern: '{pattern}'")
+            break
 
     # ----------------------------
     # Clamp score

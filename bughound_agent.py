@@ -35,13 +35,23 @@ class BugHoundAgent:
         if fixed_code.strip() == "":
             self._log("ACT", "No fix produced (refused, error, or empty output).")
 
-        risk = assess_risk(original_code=code_snippet, fixed_code=fixed_code, issues=issues)
-        self._log("TEST", f"Risk assessed as {risk.get('level', 'unknown')} (score={risk.get('score', '-')}).")
+        risk = assess_risk(
+            original_code=code_snippet, fixed_code=fixed_code, issues=issues
+        )
+        self._log(
+            "TEST",
+            f"Risk assessed as {risk.get('level', 'unknown')} (score={risk.get('score', '-')}).",
+        )
 
         if risk.get("should_autofix"):
-            self._log("REFLECT", "Fix appears safe enough to auto-apply under current policy.")
+            self._log(
+                "REFLECT", "Fix appears safe enough to auto-apply under current policy."
+            )
         else:
-            self._log("REFLECT", "Fix is not safe enough to auto-apply. Human review recommended.")
+            self._log(
+                "REFLECT",
+                "Fix is not safe enough to auto-apply. Human review recommended.",
+            )
 
         return {
             "issues": issues,
@@ -71,7 +81,9 @@ class BugHoundAgent:
 
         # UPDATED: Added exception handling for API errors/rate limits
         try:
-            raw = self.client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+            raw = self.client.complete(
+                system_prompt=system_prompt, user_prompt=user_prompt
+            )
         except Exception as e:
             self._log("ANALYZE", f"API Error: {str(e)}. Falling back to heuristics.")
             return self._heuristic_analyze(code_snippet)
@@ -79,10 +91,21 @@ class BugHoundAgent:
         issues = self._parse_json_array_of_issues(raw)
 
         if issues is None:
-            self._log("ANALYZE", "LLM output was not parseable JSON. Falling back to heuristics.")
+            self._log(
+                "ANALYZE",
+                "LLM output was not parseable JSON. Falling back to heuristics.",
+            )
             return self._heuristic_analyze(code_snippet)
 
-        return issues
+        # UPDATED: Validate LLM issues to ensure quality before accepting them
+        validated_issues = self._validate_and_clean_issues(issues)
+        if validated_issues is None:
+            self._log(
+                "ANALYZE", "LLM issues failed validation. Falling back to heuristics."
+            )
+            return self._heuristic_analyze(code_snippet)
+
+        return validated_issues
 
     def propose_fix(self, code_snippet: str, issues: List[Dict[str, str]]) -> str:
         if not issues:
@@ -107,7 +130,9 @@ class BugHoundAgent:
 
         # UPDATED: Added exception handling for API errors/rate limits
         try:
-            raw = self.client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+            raw = self.client.complete(
+                system_prompt=system_prompt, user_prompt=user_prompt
+            )
         except Exception as e:
             self._log("ACT", f"API Error: {str(e)}. Falling back to heuristic fixer.")
             return self._heuristic_fix(code_snippet, issues)
@@ -115,7 +140,9 @@ class BugHoundAgent:
         cleaned = self._strip_code_fences(raw).strip()
 
         if not cleaned:
-            self._log("ACT", "LLM returned empty output. Falling back to heuristic fixer.")
+            self._log(
+                "ACT", "LLM returned empty output. Falling back to heuristic fixer."
+            )
             return self._heuristic_fix(code_snippet, issues)
 
         return cleaned
@@ -159,7 +186,11 @@ class BugHoundAgent:
         fixed = code
 
         if any(i.get("type") == "Reliability" for i in issues):
-            fixed = re.sub(r"\bexcept\s*:\s*", "except Exception as e:\n        # [BugHound] log or handle the error\n        ", fixed)
+            fixed = re.sub(
+                r"\bexcept\s*:\s*",
+                "except Exception as e:\n        # [BugHound] log or handle the error\n        ",
+                fixed,
+            )
 
         if any(i.get("type") == "Code Quality" for i in issues):
             if "import logging" not in fixed:
@@ -190,13 +221,61 @@ class BugHoundAgent:
         for item in arr:
             if not isinstance(item, dict):
                 continue
+            # Normalize severity to titlecase (low → Low, HIGH → High, etc.)
+            severity_raw = str(item.get("severity", "Unknown")).strip()
+            # Map common variations to canonical form
+            severity_lower = severity_raw.lower()
+            severity_map = {"high": "High", "medium": "Medium", "low": "Low"}
+            severity = severity_map.get(severity_lower, severity_raw)
+            
             issues.append(
                 {
                     "type": str(item.get("type", "Issue")),
-                    "severity": str(item.get("severity", "Unknown")),
+                    "severity": severity,
                     "msg": str(item.get("msg", "")).strip(),
                 }
             )
+        return issues
+
+    def _validate_and_clean_issues(
+        self, issues: List[Dict[str, str]]
+    ) -> Optional[List[Dict[str, str]]]:
+        """
+        Validate that LLM-generated issues meet quality standards.
+
+        Requirements:
+        - Each issue must have a non-empty 'msg' (substance check)
+        - Each issue must have 'severity' as one of: High, Medium, Low
+
+        Returns the validated list if all pass, or None if any fail validation.
+        """
+        if not issues:
+            return issues
+
+        valid_severities = {"High", "Medium", "Low"}
+
+        for i, issue in enumerate(issues):
+            # Check: msg must not be empty
+            msg = issue.get("msg", "").strip()
+            if not msg:
+                self._log(
+                    "ANALYZE", f"Validation failed: Issue #{i} has empty message."
+                )
+                return None
+
+            # Check: severity must be one of the valid values
+            severity = issue.get("severity", "").strip()
+            if severity not in valid_severities:
+                self._log(
+                    "ANALYZE",
+                    f"Validation failed: Issue #{i} has invalid severity '{severity}'. Expected: High, Medium, or Low.",
+                )
+                return None
+
+        self._log(
+            "ANALYZE",
+            f"LLM issues passed validation ({len(issues)} issue(s) accepted).",
+        )
         return issues
 
     def _try_json_loads(self, s: str) -> Any:
@@ -221,7 +300,9 @@ class BugHoundAgent:
 
     def _strip_code_fences(self, text: str) -> str:
         text = text.strip()
-        match = re.search(r"```(?:python)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+        match = re.search(
+            r"```(?:python)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE
+        )
         if match:
             return match.group(1)
         return text

@@ -46,3 +46,19 @@ def test_missing_return_is_penalized():
     )
     assert risk["score"] < 100
     assert any("Return" in r or "return" in r for r in risk["reasons"])
+
+
+def test_multiarg_print_to_logging_replacement_is_penalized():
+    original = 'def greet(name):\n    print("Hello", name)\n    return True\n'
+    fixed = 'import logging\n\ndef greet(name):\n    logging.info("Hello", name)\n    return True\n'
+    risk = assess_risk(
+        original_code=original,
+        fixed_code=fixed,
+        issues=[{"type": "Code Quality", "severity": "Low", "msg": "print found"}],
+    )
+    assert risk["score"] < 75
+    assert risk["should_autofix"] is False
+    assert any(
+        "logging.info" in r or "multi-argument" in r.lower() or "positional" in r.lower()
+        for r in risk["reasons"]
+    )
